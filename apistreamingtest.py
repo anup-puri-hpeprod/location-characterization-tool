@@ -1,4 +1,4 @@
-from apitokenfetcher import ApiTokenFetcher
+from apitokenfetcher import ApiTokenFetcher, load_env_file
 import argparse
 import os
 import sys
@@ -20,6 +20,8 @@ def parse_arguments():
                        help='WebSocket endpoint path (default: %(default)s)')
 
     args = parser.parse_args()
+
+    load_env_file()
 
     # Get values from arguments or environment variables
     client_id = args.client_id or os.getenv('CNX_CLIENT_ID')

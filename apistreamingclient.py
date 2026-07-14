@@ -1,28 +1,46 @@
-from typing import Type
+from typing import Optional, Type
 from websocket import create_connection
 import ssl
 import websocket
 from typing import TypedDict
 from websocket._exceptions import WebSocketBadStatusException
 
-# Load the Protobuf message definition
+# Load the Protobuf message definitions.
+# Location and geofence payloads differ between API versions (v1 carries a
+# tenant_id and shifts the oneof field numbers), so each version has its own
+# generated module and must be decoded with the matching one.
 from protobuf import (
     event_pb2,
-    location_pb2,
+    location_v1_pb2,
+    location_v1alpha1_pb2,
+    geofence_v1_pb2,
+    geofence_v1alpha1_pb2,
     wids_pb2,
-    geofence_pb2
 )
 
 class EventTypeDecoder(TypedDict):
     top_level_decoder: Type
-    sub_msg_field: str
+    # Field of the parsed envelope to surface. When None, the entire top-level
+    # message is shown (e.g. location events, so the v1 tenant_id is visible).
+    sub_msg_field: Optional[str]
 
+
+# Keyed by the full, version-specific CloudEvent type. v1 and v1alpha1 are NOT
+# collapsed because their wire layouts differ and must be parsed with the
+# version-matched message class.
 event_type_decoders: dict[str, EventTypeDecoder] = {
-    "com.hpe.greenlake.network-services.v1alpha1.wids-rules.detection.created": {"top_level_decoder": wids_pb2.WidsStreamMessage, "sub_msg_field": "widsRulesEvent"},
-    "com.hpe.greenlake.network-services.v1alpha1.wids-signatures.detection.created": {"top_level_decoder": wids_pb2.WidsStreamMessage, "sub_msg_field": "widsSignaturesEvent"},
-    "com.hpe.greenlake.network-services.v1alpha1.wifi-client-locations.created": {"top_level_decoder": location_pb2.StreamLocationMessage, "sub_msg_field": "wifi_client_location"},
-    "com.hpe.greenlake.network-services.v1alpha1.asset-tags.last-known-location.created": {"top_level_decoder": location_pb2.StreamLocationMessage, "sub_msg_field": "asset_tag_location"},
-    "com.hpe.greenlake.network-services.v1alpha1.asset-tag-geofence-crossed": {"top_level_decoder": geofence_pb2.StreamGeofenceMessage, "sub_msg_field": "asset_tag_geofence"},
+    # network-services v1
+    "com.hpe.greenlake.network-services.v1.wifi-client-locations.created": {"top_level_decoder": location_v1_pb2.StreamLocationMessage, "sub_msg_field": None},
+    "com.hpe.greenlake.network-services.v1.asset-tags.last-known-location.created": {"top_level_decoder": location_v1_pb2.StreamLocationMessage, "sub_msg_field": None},
+    "com.hpe.greenlake.network-services.v1.wifi-client-geofence-crossed": {"top_level_decoder": geofence_v1_pb2.StreamGeofenceMessage, "sub_msg_field": "wifi_client_geofence"},
+    "com.hpe.greenlake.network-services.v1.asset-tag-geofence-crossed": {"top_level_decoder": geofence_v1_pb2.StreamGeofenceMessage, "sub_msg_field": "asset_tag_geofence"},
+    # network-services v1alpha1
+    "com.hpe.greenlake.network-services.v1alpha1.wifi-client-locations.created": {"top_level_decoder": location_v1alpha1_pb2.StreamLocationMessage, "sub_msg_field": None},
+    "com.hpe.greenlake.network-services.v1alpha1.asset-tags.last-known-location.created": {"top_level_decoder": location_v1alpha1_pb2.StreamLocationMessage, "sub_msg_field": None},
+    "com.hpe.greenlake.network-services.v1alpha1.wifi-client-geofence-crossed": {"top_level_decoder": geofence_v1alpha1_pb2.StreamGeofenceMessage, "sub_msg_field": "wifi_client_geofence"},
+    "com.hpe.greenlake.network-services.v1alpha1.asset-tag-geofence-crossed": {"top_level_decoder": geofence_v1alpha1_pb2.StreamGeofenceMessage, "sub_msg_field": "asset_tag_geofence"},
+    "com.hpe.greenlake.network-services.v1alpha1.wids-rules.detection.created": {"top_level_decoder": wids_pb2.WidsStreamMessage, "sub_msg_field": "wids_rules_event"},
+    "com.hpe.greenlake.network-services.v1alpha1.wids-signatures.detection.created": {"top_level_decoder": wids_pb2.WidsStreamMessage, "sub_msg_field": "wids_signatures_event"},
 }
 
 class ApiStreamingClient:
@@ -43,7 +61,13 @@ class ApiStreamingClient:
             try:
                 top_level_message = message_class()
                 top_level_message.ParseFromString(event.proto_data.value)
-                decoded_event = getattr(top_level_message, decoder_info["sub_msg_field"])
+                sub_msg_field = decoder_info["sub_msg_field"]
+                if sub_msg_field is None:
+                    # Surface the whole envelope (e.g. location events) so fields
+                    # like the v1 tenant_id are visible alongside the payload.
+                    decoded_event = top_level_message
+                else:
+                    decoded_event = getattr(top_level_message, sub_msg_field)
             except Exception as e:
                 print(f"Error decoding event: {e}")
                 decoded_event = f"Error decoding event: {e}"

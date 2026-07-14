@@ -3,6 +3,12 @@ name = "apistreamingclient"
 version = "0.1.0"
 description = "A Python client for API streaming."
 authors = ["Your Name <your.email@example.com>"]
+packages = [
+    { include = "apistreamingclient.py" },
+    { include = "apistreamingtest.py" },
+    { include = "apitokenfetcher.py" },
+    { include = "protobuf" },
+]
 
 [tool.poetry.dependencies]
 python = "^3.8"
@@ -10,6 +16,10 @@ websocket-client = "*"
 requests-oauthlib = "*"
 oauthlib = "*"
 protobuf = "^5.29.0"
+
+[tool.poetry.scripts]
+apistream = "apistreamingtest:main"
+fetch-token = "apitokenfetcher:main"
 
 [build-system]
 requires = ["poetry-core"]
