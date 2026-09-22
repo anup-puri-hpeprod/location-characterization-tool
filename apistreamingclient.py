@@ -71,28 +71,32 @@ class ApiStreamingClient:
                     decoded_event = top_level_message
                 else:
                     decoded_event = getattr(top_level_message, sub_msg_field)
-
-                if self.csv_writer is not None:
-                    self._persist_location(event, top_level_message)
             except Exception as e:
                 print(f"Error decoding event: {e}")
                 decoded_event = f"Error decoding event: {e}"
+            else:
+                # Persist only cleanly decoded events, and outside the decode
+                # try/except so a capture failure is never masked as a decode
+                # error — it must abort the run instead of silently dropping data.
+                if self.csv_writer is not None:
+                    self._persist_location(event, top_level_message)
 
         print("Decoded Event:")
         print("==============")
         print(decoded_event)
 
     def _persist_location(self, event, top_level_message):
-        """Append v1 WiFi client-location events to the CSV sink, if enabled."""
+        """Persist v1 WiFi client-location events to the CSV sink, if enabled.
+
+        Write failures (disk full, permissions, I/O) are intentionally NOT
+        swallowed: this feature promises to persist every event, so a failed
+        write propagates to stop the stream rather than silently losing data.
+        """
         from locationcsvwriter import WIFI_CLIENT_LOCATION_V1_TYPE
 
         if event.type != WIFI_CLIENT_LOCATION_V1_TYPE:
             return
-        try:
-            self.csv_writer.write_wifi_location(event, top_level_message)
-        except Exception as e:
-            # Never let a persistence hiccup drop the stream connection.
-            print(f"Error writing location to CSV: {e}")
+        self.csv_writer.write_wifi_location(event, top_level_message)
 
     def create_ws_connection(self, access_token, end_point, header_param=None):
         if header_param is None:
