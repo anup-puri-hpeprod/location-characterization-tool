@@ -64,18 +64,26 @@ class LocationCsvWriter:
         self.density = density
         os.makedirs(output_dir, exist_ok=True)
 
-        # Human-readable local timestamp so multiple captures sort and read
-        # naturally, e.g. wifi_client_locations_v1_2026-09-21_14-36-31.csv
-        stamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        self.path = os.path.join(output_dir, f"{filename_prefix}_{stamp}.csv")
-
-        # Line-buffered text handle: each completed row is pushed to the OS as
-        # soon as its newline is written, keeping the file consistent on kill.
-        self._fh = open(self.path, "a", newline="", buffering=1, encoding="utf-8")
+        # Human-readable local timestamp with microseconds, exclusively created
+        # so two captures in the same second (or a rapid restart / concurrent
+        # start) never share a file or race on the header. Microseconds make a
+        # collision practically impossible; the retry loop covers the rest.
+        # e.g. wifi_client_locations_v1_2026-09-21_14-36-31_512430.csv
+        self._fh = None
+        while self._fh is None:
+            stamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S_%f")
+            candidate = os.path.join(output_dir, f"{filename_prefix}_{stamp}.csv")
+            try:
+                # "x" = exclusive create: fails if the path already exists.
+                # Line-buffered so each completed row is pushed to the OS as soon
+                # as its newline is written, keeping the file consistent on kill.
+                self._fh = open(candidate, "x", newline="", buffering=1, encoding="utf-8")
+            except FileExistsError:
+                continue
+            self.path = candidate
         self._writer = csv.DictWriter(self._fh, fieldnames=CSV_FIELDNAMES)
-        if self._fh.tell() == 0:
-            self._writer.writeheader()
-            self._fh.flush()
+        self._writer.writeheader()
+        self._fh.flush()
         self.rows_written = 0
         self._closed = False
 

@@ -167,9 +167,10 @@ poetry run apistream \
 
 When streaming the v1 location route, every
 `com.hpe.greenlake.network-services.v1.wifi-client-locations.created` event is
-appended to a CSV under `captures/` (override with `--csv-dir`). Filenames carry
-a human-readable local timestamp, e.g.
-`captures/wifi_client_locations_v1_2026-09-21_14-36-31.csv`.
+appended to a CSV under `captures/` (override with `--csv-dir`). Each capture
+file is created exclusively with a human-readable local timestamp (microsecond
+precision), e.g.
+`captures/wifi_client_locations_v1_2026-09-21_14-36-31_512430.csv`.
 
 The writer is intentionally lightweight: each decoded location is written and
 flushed straight to disk (nothing is buffered in memory), so the file stays a
