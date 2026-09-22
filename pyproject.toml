@@ -7,6 +7,7 @@ packages = [
     { include = "apistreamingclient.py" },
     { include = "apistreamingtest.py" },
     { include = "apitokenfetcher.py" },
+    { include = "locationcsvwriter.py" },
     { include = "protobuf" },
 ]
 

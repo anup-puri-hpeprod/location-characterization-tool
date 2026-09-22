@@ -6,6 +6,9 @@ __pycache__/
 # C extensions
 *.so
 
+# Location CSV captures
+captures/
+
 # Distribution / packaging
 .Python
 build/

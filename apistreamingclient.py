@@ -44,9 +44,12 @@ event_type_decoders: dict[str, EventTypeDecoder] = {
 }
 
 class ApiStreamingClient:
-    def __init__(self, cnx_ws_url, access_token):
+    def __init__(self, cnx_ws_url, access_token, csv_writer=None):
         self.cnx_ws_url = cnx_ws_url
         self.access_token = access_token
+        # Optional LocationCsvWriter sink; when set, v1 WiFi client-location
+        # events are appended to disk as they arrive.
+        self.csv_writer = csv_writer
 
     def decode_stream_event(self, event, proto):
         """Decode the stream event."""
@@ -68,6 +71,9 @@ class ApiStreamingClient:
                     decoded_event = top_level_message
                 else:
                     decoded_event = getattr(top_level_message, sub_msg_field)
+
+                if self.csv_writer is not None:
+                    self._persist_location(event, top_level_message)
             except Exception as e:
                 print(f"Error decoding event: {e}")
                 decoded_event = f"Error decoding event: {e}"
@@ -75,6 +81,18 @@ class ApiStreamingClient:
         print("Decoded Event:")
         print("==============")
         print(decoded_event)
+
+    def _persist_location(self, event, top_level_message):
+        """Append v1 WiFi client-location events to the CSV sink, if enabled."""
+        from locationcsvwriter import WIFI_CLIENT_LOCATION_V1_TYPE
+
+        if event.type != WIFI_CLIENT_LOCATION_V1_TYPE:
+            return
+        try:
+            self.csv_writer.write_wifi_location(event, top_level_message)
+        except Exception as e:
+            # Never let a persistence hiccup drop the stream connection.
+            print(f"Error writing location to CSV: {e}")
 
     def create_ws_connection(self, access_token, end_point, header_param=None):
         if header_param is None:
@@ -125,4 +143,5 @@ class ApiStreamingClient:
         except Exception as e:
             print(f"Exception : {e}")
             raise
-        ws.close()
+        finally:
+            ws.close()
