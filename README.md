@@ -163,6 +163,35 @@ poetry run apistream \
   --endpoint "/network-services/v1/location-events"
 ```
 
+### Capturing v1 WiFi client locations to CSV
+
+When streaming the v1 location route, every
+`com.hpe.greenlake.network-services.v1.wifi-client-locations.created` event is
+appended to a CSV under `captures/` (override with `--csv-dir`). Filenames carry
+a human-readable local timestamp, e.g.
+`captures/wifi_client_locations_v1_2026-09-21_14-36-31.csv`.
+
+The writer is intentionally lightweight: each decoded location is written and
+flushed straight to disk (nothing is buffered in memory), so the file stays a
+valid CSV even if the process is killed mid-run. `Ctrl-C` (SIGINT) and `kill`
+(SIGTERM) close the file cleanly; a hard `kill -9` (SIGKILL) still leaves a
+complete file up to the last flushed row.
+
+```bash
+# Annotate rows with a run id / AP-density label (per the QA runbook)
+poetry run apistream \
+  --endpoint "/network-services/v1/location-events" \
+  --run-id R001 --density 10m --csv-dir captures
+
+# Disable CSV capture (console decode only)
+poetry run apistream --endpoint "/network-services/v1/location-events" --no-csv
+```
+
+Columns: `ingest_ts, event_ts, run_id, density, event_type, tenant_id,
+customer_id, device_mac, x, y, latitude, longitude, error_level, associated,
+connected, assoc_bssid, site_id, building_id, floor_id, reporting_ap_count,
+reporting_ap_serials`.
+
 ### Using the Client Library
 
 ```python

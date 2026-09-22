@@ -1,8 +1,10 @@
 from apitokenfetcher import ApiTokenFetcher, load_env_file
 import argparse
 import os
+import signal
 import sys
 from apistreamingclient import ApiStreamingClient
+from locationcsvwriter import LocationCsvWriter
 
 def parse_arguments():
     """Parse command line arguments with environment variable fallbacks."""
@@ -18,6 +20,14 @@ def parse_arguments():
                        help='WebSocket URL (default: from CNX_WEBSOCKET_URL env var)')
     parser.add_argument('--endpoint',
                        help='WebSocket endpoint path (default: %(default)s)')
+    parser.add_argument('--csv-dir', default='captures',
+                       help='Directory for the location CSV capture (default: %(default)s)')
+    parser.add_argument('--run-id', default='',
+                       help='Optional run identifier annotated on every CSV row')
+    parser.add_argument('--density', default='',
+                       help='Optional AP-density label annotated on every CSV row')
+    parser.add_argument('--no-csv', action='store_true',
+                       help='Disable CSV capture of v1 WiFi client-location events')
 
     args = parser.parse_args()
 
@@ -60,7 +70,11 @@ def parse_arguments():
         'client_secret': client_secret,
         'token_url': token_url,
         'websocket_url': websocket_url,
-        'endpoint': args.endpoint
+        'endpoint': args.endpoint,
+        'csv_dir': args.csv_dir,
+        'run_id': args.run_id,
+        'density': args.density,
+        'no_csv': args.no_csv,
     }
 
 def main():
@@ -73,12 +87,25 @@ def main():
         config['client_secret'],
         config['token_url']
     )
+
+    csv_writer = None
+    if not config['no_csv']:
+        csv_writer = LocationCsvWriter(
+            output_dir=config['csv_dir'],
+            run_id=config['run_id'],
+            density=config['density'],
+        )
+        print(f"Capturing v1 WiFi client locations to {csv_writer.path}")
+        # Turn SIGTERM (kill / container stop) into a normal shutdown so the
+        # finally block runs and the CSV is flushed and closed cleanly.
+        signal.signal(signal.SIGTERM, _raise_keyboard_interrupt)
+
     try:
         token = token_fetcher.fetch_token()
         print(f"Successfully obtained access token")
 
         # Create API streaming client
-        streaming_client = ApiStreamingClient(config['websocket_url'], token)
+        streaming_client = ApiStreamingClient(config['websocket_url'], token, csv_writer=csv_writer)
 
         print(f"Connecting to {config['websocket_url']}{config['endpoint']}")
         ws = streaming_client.create_ws_connection_with_client_decoding(token, config['endpoint'])
@@ -88,6 +115,15 @@ def main():
     except Exception as e:
         print(f"Application error: {e}")
         sys.exit(1)
+    finally:
+        if csv_writer is not None:
+            csv_writer.close()
+            print(f"CSV capture closed: {csv_writer.path} ({csv_writer.rows_written} rows)")
+
+
+def _raise_keyboard_interrupt(signum, frame):
+    """Map SIGTERM to KeyboardInterrupt for a clean, flush-then-exit shutdown."""
+    raise KeyboardInterrupt
 
 if __name__ == "__main__":
     main()
