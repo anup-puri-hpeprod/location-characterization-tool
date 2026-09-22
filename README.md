@@ -116,6 +116,7 @@ After `poetry install`, two entry points are available in the Poetry environment
 |---------|------|---------|
 | `apistream` | `apistreamingtest:main` | Connect and stream/decode events |
 | `fetch-token` | `apitokenfetcher:main` | Fetch and print an OAuth2 token only |
+| `analyze-locations` | `locationanalyzer:main` | Analyze Accuracy/Stability/Latency from a capture CSV |
 
 First, verify your credentials and token issuer URL resolve to a token:
 ```bash
@@ -172,6 +173,11 @@ file is created exclusively with a human-readable local timestamp (microsecond
 precision), e.g.
 `captures/wifi_client_locations_v1_2026-09-21_14-36-31_512430.csv`.
 
+`--density` is **required** when CSV capture is enabled (choose `10m` or
+`15m`): every row is annotated with it, and the analysis script uses it to
+group and validate results per AP density. Pass `--no-csv` if you only want
+console decoding.
+
 The writer is intentionally lightweight: each decoded location is written and
 flushed straight to disk (nothing is buffered in memory), so the file stays a
 valid CSV even if the process is killed mid-run. `Ctrl-C` (SIGINT) and `kill`
@@ -179,12 +185,12 @@ valid CSV even if the process is killed mid-run. `Ctrl-C` (SIGINT) and `kill`
 complete file up to the last flushed row.
 
 ```bash
-# Annotate rows with a run id / AP-density label (per the QA runbook)
+# Annotate rows with a run id and the AP density under test (per the QA runbook)
 poetry run apistream \
   --endpoint "/network-services/v1/location-events" \
   --run-id R001 --density 10m --csv-dir captures
 
-# Disable CSV capture (console decode only)
+# Disable CSV capture (console decode only; --density not needed)
 poetry run apistream --endpoint "/network-services/v1/location-events" --no-csv
 ```
 
@@ -192,6 +198,92 @@ Columns: `ingest_ts, event_ts, run_id, density, event_type, tenant_id,
 customer_id, device_mac, x, y, latitude, longitude, error_level, associated,
 connected, assoc_bssid, site_id, building_id, floor_id, reporting_ap_count,
 reporting_ap_serials`.
+
+### Analyzing Accuracy, Stability and Latency
+
+`analyze-locations` implements the QA-runbook calculations (§5) against a
+single capture CSV and prints Meridian-style result tables for the AP density
+under test. It needs two inputs:
+
+1. the **positions CSV** produced by `apistream` (above), and
+2. a **ground-truth CSV** with the real-world location of every Wi-Fi client
+   under test, in map Cartesian meters.
+
+#### Ground-truth CSV format
+
+```csv
+device_mac,x_true,y_true,t_arrival
+aa:bb:cc:00:11:22,42.5,31.0,
+aa:bb:cc:00:33:44,10.0,25.5,
+aa:bb:cc:00:55:66,58.2,12.7,2026-09-21T14:05:30Z
+```
+
+- `device_mac` — client MAC as it appears in the capture (case-insensitive).
+- `x_true`, `y_true` — surveyed position in meters (runbook §2.5).
+- `t_arrival` — optional ISO-8601 timestamp; set it only for devices that were
+  **moved** to `(x_true, y_true)` during the run. Devices with a `t_arrival`
+  feed the Latency metric (settle time after arrival, §5.4); leave it empty
+  for stationary Accuracy/Stability devices.
+
+#### Running the analysis
+
+```bash
+poetry run analyze-locations \
+  captures/wifi_client_locations_v1_2026-09-21_14-36-31_512430.csv \
+  --truth ground_truth.csv \
+  --density 10m
+```
+
+Options:
+
+| Flag | Meaning |
+| --- | --- |
+| `--density {10m,15m}` | AP density of the run (required). Rows annotated with a different density are skipped with a warning. |
+| `--settle-tolerance <m>` | Latency settle tolerance in meters. Default: the run's measured accuracy P90 (§5.4). |
+| `--settle-hold <n>` | Consecutive in-tolerance samples required to declare a device settled (default 2). |
+| `--min-samples <n>` | Warn when a device has fewer samples than this (default 30, §6.1). |
+
+#### Output
+
+Markdown tables per metric, aggregated across all devices at the density, in
+the runbook's reporting format — plus a per-device breakdown and the
+supporting update-interval table:
+
+```
+## Wi-Fi client location performance — AP density 10m
+
+Devices analyzed: 3  |  Samples: 412
+
+### Accuracy (meters)
+
+| AP Density | Average | Deviation | 90th Percentile | Max |
+| --- | --- | --- | --- | --- |
+| 10 | 3.12 | 1.45 | 5.02 | 8.91 |
+
+### Stability (meters)
+...
+
+### Latency (seconds)
+...
+
+### Update interval (seconds)
+...
+```
+
+Calculations follow the runbook: **Accuracy** is the per-sample Euclidean
+distance to ground truth (§5.1–5.2); **Stability** is per-sample drift about
+each device's own computed centroid (§5.3); **Latency** is the time from
+`t_arrival` until the first sample that stays within the settle tolerance for
+the hold window (§5.4); **Update interval** is the inter-arrival time between
+consecutive samples (§5.5). For moved devices (those with a `t_arrival`),
+only samples **after** arrival count toward Accuracy and Stability, matching
+the runbook's stationary-device requirement.
+
+Error handling: the script exits non-zero with a clear message on missing or
+malformed files, missing columns, bad numbers/timestamps, duplicate or empty
+MACs, and when no capture rows match the ground-truth devices. It warns (but
+continues) on rows without a computed position, density mismatches,
+under-sampled devices, and latency devices that never settle.
 
 ### Using the Client Library
 
@@ -211,6 +303,8 @@ client.create_ws_connection_with_client_decoding(access_token, endpoint)
 ├── apistreamingclient.py     # Main streaming client class
 ├── apistreamingtest.py       # CLI application and example usage (apistream)
 ├── apitokenfetcher.py        # OAuth2 token fetcher + .env loader (fetch-token)
+├── locationcsvwriter.py      # Append-only CSV sink for v1 WiFi client locations
+├── locationanalyzer.py       # Accuracy/Stability/Latency analysis (analyze-locations)
 ├── .env.example              # Configuration template (copy to .env)
 ├── protobuf/                    # Protocol Buffer generated files
 │   ├── __init__.py             # Package initialization

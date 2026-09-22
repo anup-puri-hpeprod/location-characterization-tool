@@ -8,6 +8,7 @@ packages = [
     { include = "apistreamingtest.py" },
     { include = "apitokenfetcher.py" },
     { include = "locationcsvwriter.py" },
+    { include = "locationanalyzer.py" },
     { include = "protobuf" },
 ]
 
@@ -21,6 +22,7 @@ protobuf = "^5.29.0"
 [tool.poetry.scripts]
 apistream = "apistreamingtest:main"
 fetch-token = "apitokenfetcher:main"
+analyze-locations = "locationanalyzer:main"
 
 [build-system]
 requires = ["poetry-core"]

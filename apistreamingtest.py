@@ -24,12 +24,17 @@ def parse_arguments():
                        help='Directory for the location CSV capture (default: %(default)s)')
     parser.add_argument('--run-id', default='',
                        help='Optional run identifier annotated on every CSV row')
-    parser.add_argument('--density', default='',
-                       help='Optional AP-density label annotated on every CSV row')
+    parser.add_argument('--density', choices=['10m', '15m'],
+                       help='AP density of this run, annotated on every CSV row; '
+                            'required unless --no-csv (the analyze script needs it)')
     parser.add_argument('--no-csv', action='store_true',
                        help='Disable CSV capture of v1 WiFi client-location events')
 
     args = parser.parse_args()
+
+    if not args.no_csv and not args.density:
+        parser.error('--density is required when CSV capture is enabled '
+                     '(choose 10m or 15m, or pass --no-csv)')
 
     load_env_file()
 
@@ -73,7 +78,7 @@ def parse_arguments():
         'endpoint': args.endpoint,
         'csv_dir': args.csv_dir,
         'run_id': args.run_id,
-        'density': args.density,
+        'density': args.density or '',
         'no_csv': args.no_csv,
     }
 
