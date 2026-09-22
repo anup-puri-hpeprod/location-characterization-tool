@@ -25,8 +25,12 @@ def parse_arguments():
     parser.add_argument('--run-id', default='',
                        help='Optional run identifier annotated on every CSV row')
     parser.add_argument('--density', choices=['10m', '15m'],
-                       help='AP density of this run, annotated on every CSV row; '
-                            'required unless --no-csv (the analyze script needs it)')
+                       help='AP density of this run, annotated on every CSV row '
+                            'and embedded in the capture filename; required '
+                            'unless --no-csv (the analyze script needs it)')
+    parser.add_argument('--duration', type=int, default=None, metavar='MINUTES',
+                       help='Stop streaming after this many minutes (integer > 0) '
+                            'and close the capture cleanly; omit to run until Ctrl-C')
     parser.add_argument('--no-csv', action='store_true',
                        help='Disable CSV capture of v1 WiFi client-location events')
 
@@ -35,6 +39,8 @@ def parse_arguments():
     if not args.no_csv and not args.density:
         parser.error('--density is required when CSV capture is enabled '
                      '(choose 10m or 15m, or pass --no-csv)')
+    if args.duration is not None and args.duration <= 0:
+        parser.error('--duration must be a positive integer number of minutes')
 
     load_env_file()
 
@@ -79,6 +85,7 @@ def parse_arguments():
         'csv_dir': args.csv_dir,
         'run_id': args.run_id,
         'density': args.density or '',
+        'duration': args.duration,
         'no_csv': args.no_csv,
     }
 
@@ -112,8 +119,20 @@ def main():
         # Create API streaming client
         streaming_client = ApiStreamingClient(config['websocket_url'], token, csv_writer=csv_writer)
 
+        if config['duration']:
+            # SIGALRM interrupts the blocking recv() and unwinds through the
+            # client's graceful-shutdown path (ws closed, CSV flushed).
+            signal.signal(signal.SIGALRM, _raise_keyboard_interrupt)
+            signal.alarm(config['duration'] * 60)
+            print(f"Run duration: {config['duration']} minute(s); "
+                  "the stream will stop automatically")
+
         print(f"Connecting to {config['websocket_url']}{config['endpoint']}")
         ws = streaming_client.create_ws_connection_with_client_decoding(token, config['endpoint'])
+
+        if config['duration']:
+            print(f"Run duration of {config['duration']} minute(s) reached or "
+                  "stream ended; shutting down")
 
     except KeyboardInterrupt:
         print("\nApplication interrupted by user")
@@ -121,13 +140,15 @@ def main():
         print(f"Application error: {e}")
         sys.exit(1)
     finally:
+        if config['duration']:
+            signal.alarm(0)
         if csv_writer is not None:
             csv_writer.close()
             print(f"CSV capture closed: {csv_writer.path} ({csv_writer.rows_written} rows)")
 
 
 def _raise_keyboard_interrupt(signum, frame):
-    """Map SIGTERM to KeyboardInterrupt for a clean, flush-then-exit shutdown."""
+    """Map SIGTERM/SIGALRM to KeyboardInterrupt for a clean, flush-then-exit shutdown."""
     raise KeyboardInterrupt
 
 if __name__ == "__main__":

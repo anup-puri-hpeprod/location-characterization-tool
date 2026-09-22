@@ -169,14 +169,18 @@ poetry run apistream \
 When streaming the v1 location route, every
 `com.hpe.greenlake.network-services.v1.wifi-client-locations.created` event is
 appended to a CSV under `captures/` (override with `--csv-dir`). Each capture
-file is created exclusively with a human-readable local timestamp (microsecond
-precision), e.g.
-`captures/wifi_client_locations_v1_2026-09-21_14-36-31_512430.csv`.
+file is created exclusively, named with the AP density and a human-readable
+local timestamp (microsecond precision), e.g.
+`captures/wifi_client_locations_v1_10m_2026-09-21_14-36-31_512430.csv`.
 
 `--density` is **required** when CSV capture is enabled (choose `10m` or
-`15m`): every row is annotated with it, and the analysis script uses it to
-group and validate results per AP density. Pass `--no-csv` if you only want
-console decoding.
+`15m`): it becomes part of the capture filename, every row is annotated with
+it, and the analysis script uses it to group and validate results per AP
+density. Pass `--no-csv` if you only want console decoding.
+
+`--duration <minutes>` (integer > 0) makes the run self-terminating: after the
+given number of minutes the stream disconnects and the CSV is flushed and
+closed cleanly. Omit it to run until `Ctrl-C`.
 
 The writer is intentionally lightweight: each decoded location is written and
 flushed straight to disk (nothing is buffered in memory), so the file stays a
@@ -185,10 +189,15 @@ valid CSV even if the process is killed mid-run. `Ctrl-C` (SIGINT) and `kill`
 complete file up to the last flushed row.
 
 ```bash
-# Annotate rows with a run id and the AP density under test (per the QA runbook)
+# 30-minute accuracy run at 10 m density (per the QA runbook §6.1)
 poetry run apistream \
   --endpoint "/network-services/v1/location-events" \
-  --run-id R001 --density 10m --csv-dir captures
+  --run-id R001 --density 10m --duration 30 --csv-dir captures
+
+# Open-ended run (stop with Ctrl-C), e.g. overnight stability capture
+poetry run apistream \
+  --endpoint "/network-services/v1/location-events" \
+  --run-id R002 --density 15m
 
 # Disable CSV capture (console decode only; --density not needed)
 poetry run apistream --endpoint "/network-services/v1/location-events" --no-csv
@@ -229,7 +238,7 @@ aa:bb:cc:00:55:66,58.2,12.7,2026-09-21T14:05:30Z
 
 ```bash
 poetry run analyze-locations \
-  captures/wifi_client_locations_v1_2026-09-21_14-36-31_512430.csv \
+  captures/wifi_client_locations_v1_10m_2026-09-21_14-36-31_512430.csv \
   --truth ground_truth.csv \
   --density 10m
 ```
