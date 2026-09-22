@@ -1,22 +1,55 @@
-# CNX API Streaming Test
+# Location Characterization Tool
 
-A Python client for streaming API events from HPE GreenLake Network Services. This project provides real-time streaming of network events including WiFi client locations, WIDS (Wireless Intrusion Detection System) rules, and signatures through WebSocket connections.
+Tooling to characterize RTLS location performance for HPE GreenLake Network
+Services streaming APIs, per the RTLS Location Performance QA Runbook. It has
+three parts that form one workflow:
+
+1. **Stream** — a WebSocket client that authenticates with OAuth2 and decodes
+   location / geofence / WIDS CloudEvents in real time (`apistream`).
+2. **Collect** — crash-safe CSV capture of v1 WiFi client-location events,
+   tagged with a run id and the AP density under test, with optional
+   fixed-duration runs (`apistream --density … --duration …`).
+3. **Analyze** — Meridian-style **Accuracy / Stability / Latency** result
+   tables computed from a capture plus surveyed ground truth
+   (`analyze-locations`).
 
 ## Features
 
-- **Real-time Event Streaming**: Connect to HPE GreenLake Network Services via WebSocket
-- **OAuth2 Authentication**: Secure authentication using client credentials flow
-- **Protocol Buffer Support**: Efficient binary serialization for network events
-- **Multiple Event Types**: Support for WIDS rules, WIDS signatures, and WiFi client location events
-- **Configurable**: Command-line arguments and environment variable support
+- **Real-time event streaming**: connect to HPE GreenLake Network Services via WebSocket
+- **OAuth2 authentication**: client-credentials flow, `.env`-driven configuration
+- **Version-matched Protobuf decoding**: v1 and v1alpha1 payloads have different wire layouts and are decoded with the matching generated modules
+- **Crash-safe CSV capture**: every v1 WiFi client-location event is written and flushed as it arrives; the AP density is embedded in the filename and every row
+- **Timed collection runs**: `--duration <minutes>` stops the stream and closes the capture cleanly — ideal for runbook accuracy/stability runs
+- **Runbook analysis**: `analyze-locations` produces avg / deviation / P90 / max tables for Accuracy (§5.1–5.2), Stability (§5.3), Latency (§5.4) and update interval (§5.5) per AP density (10 m / 15 m)
 
 ## Supported Event Types
 
-- `com.hpe.greenlake.network-services.v1alpha1.wids-rules`
-- `com.hpe.greenlake.network-services.v1alpha1.wids-signatures` 
-- `com.hpe.greenlake.network-services.v1alpha1.wifi-client-locations.created`
-- `com.hpe.greenlake.network-services.v1alpha1.asset-tags.last-known-location.created`
-- `com.hpe.greenlake.network-services.v1alpha1.asset-tag-geofence-crossed`
+All types are prefixed `com.hpe.greenlake.network-services.<version>.`:
+
+| Version | Event types |
+| --- | --- |
+| `v1` | `wifi-client-locations.created`, `asset-tags.last-known-location.created`, `wifi-client-geofence-crossed`, `asset-tag-geofence-crossed` |
+| `v1alpha1` | the same four location/geofence types, plus `wids-rules.detection.created` and `wids-signatures.detection.created` |
+
+## QA Workflow at a Glance
+
+```bash
+# 1. Verify credentials resolve to a token
+poetry run fetch-token
+
+# 2. Collect: 30-minute capture at 10 m AP density (runbook §6.1)
+poetry run apistream --endpoint "/network-services/v1/location-events" \
+  --run-id ACC-10M-R001 --density 10m --duration 30
+
+# 3. Analyze against surveyed ground truth
+poetry run analyze-locations captures/wifi_client_locations_v1_10m_<timestamp>.csv \
+  --truth ground_truth_10m.csv --density 10m
+```
+
+Repeat per AP density (`10m`, then `15m`) and per runbook procedure
+(accuracy / latency / stability runs, §6.1–6.3). Details in
+[Capturing](#capturing-v1-wifi-client-locations-to-csv) and
+[Analyzing](#analyzing-accuracy-stability-and-latency) below.
 
 ## Requirements
 
@@ -27,15 +60,16 @@ A Python client for streaming API events from HPE GreenLake Network Services. Th
 
 1. Clone the repository:
 ```bash
-git clone <repository-url>
-cd cnx-api-streaming-test
+git clone https://github.com/anup-puri-hpeprod/location-characterization-tool.git
+cd location-characterization-tool
 ```
 
 2. Install dependencies using Poetry:
 ```bash
 poetry install
 ```
-This also registers the console-script entry points (`apistream` and `fetch-token`) inside the Poetry virtual environment.
+This also registers the console-script entry points (`apistream`, `fetch-token`
+and `analyze-locations`) inside the Poetry virtual environment.
 
 3. Activate the virtual environment:
 ```bash
@@ -110,7 +144,7 @@ poetry run apistream \
 
 ### Console Scripts (recommended)
 
-After `poetry install`, two entry points are available in the Poetry environment:
+After `poetry install`, three entry points are available in the Poetry environment:
 
 | Command | Runs | Purpose |
 |---------|------|---------|
@@ -123,23 +157,26 @@ First, verify your credentials and token issuer URL resolve to a token:
 poetry run fetch-token
 ```
 
-Then start streaming (location/asset-tag/geofence events):
+Then start streaming (location/asset-tag/geofence events). When capturing to
+CSV (the default on the v1 location route), `--density {10m,15m}` is required:
 ```bash
-poetry run apistream --endpoint "/network-services/v1/location-events"
+poetry run apistream --endpoint "/network-services/v1/location-events" --density 10m
 ```
 
 If you have activated the environment with `poetry shell`, you can drop the `poetry run` prefix:
 ```bash
-apistream --endpoint "/network-services/v1/location-events"
+apistream --endpoint "/network-services/v1/location-events" --density 10m
 ```
 
 See all options with `poetry run apistream --help`.
 
 ### Basic Usage
 
-With configuration in `.env` or exported:
+With configuration in `.env` or exported (`--no-csv` streams console-only, so
+no density is needed):
 ```bash
-poetry run apistream --endpoint "/network-services/v1/location-events"
+poetry run apistream --endpoint "/network-services/v1/location-events" --density 10m
+poetry run apistream --endpoint "/network-services/v1alpha1/wids" --no-csv
 ```
 
 Both `v1` and `v1alpha1` location/geofence routes are supported (their payloads have
@@ -161,7 +198,8 @@ poetry run apistream \
   --client-secret "your-client-secret" \
   --token-url "https://pavo-sso.common.cloud.hpe.com/as/token.oauth2" \
   --websocket-url "wss://cnx-apigw-evian3.arubadev.cloud.hpe.com" \
-  --endpoint "/network-services/v1/location-events"
+  --endpoint "/network-services/v1/location-events" \
+  --run-id R001 --density 10m --duration 30
 ```
 
 ### Capturing v1 WiFi client locations to CSV
@@ -309,10 +347,10 @@ client.create_ws_connection_with_client_decoding(access_token, endpoint)
 ## Project Structure
 
 ```
-├── apistreamingclient.py     # Main streaming client class
-├── apistreamingtest.py       # CLI application and example usage (apistream)
+├── apistreamingclient.py     # Streaming client: decode + CSV persistence hook
+├── apistreamingtest.py       # CLI: stream/collect with --density/--duration (apistream)
 ├── apitokenfetcher.py        # OAuth2 token fetcher + .env loader (fetch-token)
-├── locationcsvwriter.py      # Append-only CSV sink for v1 WiFi client locations
+├── locationcsvwriter.py      # Append-only, crash-safe CSV sink for v1 WiFi client locations
 ├── locationanalyzer.py       # Accuracy/Stability/Latency analysis (analyze-locations)
 ├── .env.example              # Configuration template (copy to .env)
 ├── protobuf/                    # Protocol Buffer generated files
@@ -348,11 +386,22 @@ Events are classified as UDP (< 32KB) or GRPC (≥ 32KB) based on their size.
 
 ## Error Handling
 
-The client handles:
+The streaming client handles:
 - WebSocket connection errors
 - Authentication failures
 - Protocol Buffer parsing errors
-- Graceful shutdown on Ctrl-C
+- Graceful shutdown on `Ctrl-C`, `SIGTERM` and `--duration` expiry (websocket
+  closed, CSV flushed and closed, row count printed)
+
+The CSV capture **fails fast**: a write failure (disk full, permissions, I/O)
+aborts the stream instead of silently dropping rows, and capture files are
+created exclusively so concurrent runs can never share a file.
+
+The analyzer exits non-zero with a clear message on missing/malformed files,
+missing columns, bad numbers or timestamps, duplicate or empty MACs, and when
+no capture rows match the ground-truth devices; it warns (but continues) on
+rows without a computed position, density mismatches, under-sampled devices
+and latency devices that never settle.
 
 ## Development
 
@@ -419,3 +468,5 @@ This project is part of HPE GreenLake Network Services development and testing.
 ## Support
 
 For issues and questions related to HPE GreenLake Network Services API, please refer to the official HPE documentation or contact support.
+For the measurement methodology (metric definitions, coordinate calibration,
+test procedures), see the RTLS Location Performance QA Runbook.
